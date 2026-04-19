@@ -48,6 +48,7 @@ function TeleportService.getRemotes()
 	cachedRemotes = {
 		Folder = folder,
 		StateChanged = ensureRemoteEvent(folder, Config.STATE_EVENT_NAME),
+		SystemMessage = ensureRemoteEvent(folder, Config.SYSTEM_MESSAGE_EVENT_NAME),
 		RequestCapacity = ensureRemoteEvent(folder, Config.REQUEST_CAPACITY_EVENT_NAME),
 		RequestKick = ensureRemoteEvent(folder, Config.REQUEST_KICK_EVENT_NAME),
 		RequestExit = ensureRemoteEvent(folder, Config.REQUEST_EXIT_EVENT_NAME),
@@ -84,6 +85,11 @@ end
 function TeleportService.onStateChanged(callback)
 	local remotes = TeleportService.getRemotes()
 	return remotes.StateChanged.OnClientEvent:Connect(callback)
+end
+
+function TeleportService.onSystemMessage(callback)
+	local remotes = TeleportService.getRemotes()
+	return remotes.SystemMessage.OnClientEvent:Connect(callback)
 end
 
 return TeleportService

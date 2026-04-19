@@ -54,6 +54,30 @@ root.BackgroundTransparency = 1
 root.Size = UDim2.fromScale(1, 1)
 root.Parent = gui
 
+local messageFrame = Instance.new("Frame")
+messageFrame.AnchorPoint = Vector2.new(0.5, 0)
+messageFrame.Position = UDim2.fromScale(0.5, 0.06)
+messageFrame.Size = UDim2.fromOffset(520, 48)
+messageFrame.BackgroundColor3 = Color3.fromRGB(154, 62, 62)
+messageFrame.BackgroundTransparency = 0.2
+messageFrame.BorderSizePixel = 0
+messageFrame.Visible = false
+messageFrame.Parent = root
+
+local messageCorner = Instance.new("UICorner")
+messageCorner.CornerRadius = UDim.new(0, 10)
+messageCorner.Parent = messageFrame
+
+local messageLabel = Instance.new("TextLabel")
+messageLabel.BackgroundTransparency = 1
+messageLabel.Size = UDim2.fromScale(1, 1)
+messageLabel.Font = Enum.Font.GothamSemibold
+messageLabel.Text = ""
+messageLabel.TextColor3 = Color3.fromRGB(255, 245, 245)
+messageLabel.TextSize = 16
+messageLabel.TextWrapped = true
+messageLabel.Parent = messageFrame
+
 local panel = Instance.new("Frame")
 panel.AnchorPoint = Vector2.new(0.5, 0.5)
 panel.Position = UDim2.fromScale(0.5, 0.75)
@@ -335,4 +359,15 @@ local function applyState(state)
 end
 
 TeleportService.onStateChanged(applyState)
+
+TeleportService.onSystemMessage(function(message)
+	messageLabel.Text = tostring(message)
+	messageFrame.Visible = true
+	task.delay(6, function()
+		if messageLabel.Text == tostring(message) then
+			messageFrame.Visible = false
+		end
+	end)
+end)
+
 applyStateToUi()

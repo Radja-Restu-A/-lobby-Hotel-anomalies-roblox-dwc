@@ -10,6 +10,25 @@ local remotes = TeleportNet.getRemotes()
 
 local manager = {}
 
+local function validateDestinationPlaceId()
+	if typeof(Config.PLACE_ID) ~= "number" then
+		warn("Teleport PLACE_ID must be a number. Current value:", Config.PLACE_ID)
+		return false
+	end
+
+	if Config.PLACE_ID == game.PlaceId then
+		warn("Teleport PLACE_ID is same as current lobby PlaceId. Update TeleportConfig.PLACE_ID to the hotel place id.", Config.PLACE_ID)
+		return false
+	end
+
+	if Config.PLACE_ID == game.GameId then
+		warn("Teleport PLACE_ID appears to be a UniverseId/GameId. Use the destination PLACE id instead.", Config.PLACE_ID)
+		return false
+	end
+
+	return true
+end
+
 -- Store room state per area name
 local rooms = {}
 local playerAreaLookup = {}
@@ -37,6 +56,15 @@ local function getRoomState(areaName)
 		rooms[areaName] = createRoomState()
 	end
 	return rooms[areaName]
+end
+
+local function notifyAreaPlayers(areaName, message)
+	local room = getRoomState(areaName)
+	for _, player in ipairs(room.activeOccupants) do
+		if player and player.Parent then
+			remotes.SystemMessage:FireClient(player, message)
+		end
+	end
 end
 
 local function findTeleportAreaInstance(areaName)
@@ -444,6 +472,16 @@ local function startCountdown(areaName, capacity)
 		return
 	end
 
+	if not validateDestinationPlaceId() then
+		notifyAreaPlayers(areaName, "Teleport gagal: PLACE_ID tujuan tidak valid. Cek TeleportConfig.")
+		room.phase = "awaiting_capacity"
+		room.capacity = nil
+		room.countdownEndsAt = nil
+		room.reservedServerAccessCode = nil
+		broadcastState(areaName, true)
+		return
+	end
+
 	room.capacity = capacity
 	while #room.activeOccupants > room.capacity do
 		removeOccupant(areaName, room.activeOccupants[#room.activeOccupants].UserId, true)
@@ -458,6 +496,13 @@ local function startCountdown(areaName, capacity)
 			room.reservedServerAccessCode = accessCode
 		else
 			warn("ReserveServer failed for " .. areaName .. ":", accessCode)
+			notifyAreaPlayers(areaName, "Teleport gagal: ReserveServer gagal. Coba lagi.")
+			room.phase = "awaiting_capacity"
+			room.capacity = nil
+			room.countdownEndsAt = nil
+			room.reservedServerAccessCode = nil
+			broadcastState(areaName, true)
+			return
 		end
 	end
 
@@ -470,6 +515,17 @@ local function teleportActivePlayers(areaName)
 	local room = getRoomState(areaName)
 	if #room.activeOccupants == 0 then
 		resetRoom(areaName)
+		broadcastState(areaName, true)
+		return
+	end
+
+	if not validateDestinationPlaceId() then
+		warn("Teleport canceled for area because destination PLACE_ID is invalid:", areaName)
+		notifyAreaPlayers(areaName, "Teleport dibatalkan: PLACE_ID tujuan tidak valid.")
+		room.phase = "awaiting_capacity"
+		room.capacity = nil
+		room.countdownEndsAt = nil
+		room.reservedServerAccessCode = nil
 		broadcastState(areaName, true)
 		return
 	end
@@ -495,6 +551,7 @@ local function teleportActivePlayers(areaName)
 
 	if not success then
 		warn("Teleport failed for " .. areaName .. ":", err)
+		notifyAreaPlayers(areaName, "Teleport gagal: " .. tostring(err))
 	end
 
 	resetRoom(areaName)
@@ -569,6 +626,8 @@ local function resolveAreaNameForPlayer(player, requestedAreaName)
 end
 
 function manager.start()
+	validateDestinationPlaceId()
+
 	-- Discover all teleport areas
 	local areas = findAllAreas()
 	if #areas == 0 then
