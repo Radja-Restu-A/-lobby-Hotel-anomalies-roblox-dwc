@@ -6,14 +6,31 @@ local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Te
 local TeleportService = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("TeleportService"))
 
 local currentState = {
+	areaName = nil,
 	phase = "idle",
 	masterUserId = nil,
 	capacity = nil,
 	occupants = {},
 }
 
+local currentAreaName = nil
+
 local function isLocalMaster()
 	return currentState.masterUserId == LocalPlayer.UserId
+end
+
+local function stateHasLocalPlayer(state)
+	if state.masterUserId == LocalPlayer.UserId then
+		return true
+	end
+
+	for _, occupant in ipairs(state.occupants or {}) do
+		if occupant.userId == LocalPlayer.UserId then
+			return true
+		end
+	end
+
+	return false
 end
 
 local function hasLocalPlayerInRoom()
@@ -106,7 +123,7 @@ exitCorner.CornerRadius = UDim.new(0, 10)
 exitCorner.Parent = exitButton
 
 exitButton.MouseButton1Click:Connect(function()
-	TeleportService.requestExit()
+	TeleportService.requestExit(currentAreaName)
 end)
 
 local seatButtons = {}
@@ -147,7 +164,7 @@ for capacity = 1, Config.MAX_ROOM_SIZE do
 		if currentState.phase ~= "awaiting_capacity" then
 			return
 		end
-		TeleportService.requestCapacity(capacity)
+		TeleportService.requestCapacity(currentAreaName, capacity)
 	end)
 
 	seatButtons[capacity] = button
@@ -261,7 +278,7 @@ for _, slot in ipairs(avatarSlots) do
 		if slot.userId == LocalPlayer.UserId then
 			return
 		end
-		TeleportService.requestKick(slot.userId)
+		TeleportService.requestKick(currentAreaName, slot.userId)
 	end)
 end
 
@@ -290,10 +307,30 @@ local function applyStateToUi()
 end
 
 local function applyState(state)
+	if not state or not state.areaName then
+		return
+	end
+
+	if currentAreaName and state.areaName ~= currentAreaName and not stateHasLocalPlayer(state) then
+		return
+	end
+
+	if not currentAreaName and not stateHasLocalPlayer(state) then
+		return
+	end
+
+	currentAreaName = currentAreaName or state.areaName
 	currentState.phase = state.phase or "idle"
+	currentState.areaName = state.areaName
 	currentState.masterUserId = state.masterUserId
 	currentState.capacity = state.capacity
 	currentState.occupants = state.occupants or {}
+
+	if currentAreaName == state.areaName and currentState.phase == "idle" and #currentState.occupants == 0 then
+		currentAreaName = nil
+		currentState.areaName = nil
+	end
+
 	applyStateToUi()
 end
 

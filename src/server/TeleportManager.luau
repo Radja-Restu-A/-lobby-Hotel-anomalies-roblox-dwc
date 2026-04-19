@@ -10,24 +10,50 @@ local remotes = TeleportNet.getRemotes()
 
 local manager = {}
 
-local room = {
-	phase = "idle",
-	masterUserId = nil,
-	masterName = nil,
-	capacity = nil,
-	countdownEndsAt = nil,
-	activeOccupants = {},
-	occupiedLookup = {},
-	lastBroadcastKey = "",
-}
-
-local touchDebounceByUserId = {}
+-- Store room state per area name
+local rooms = {}
+local playerAreaLookup = {}
+local areaStatusGuis = {}
+local areaStatusLabels = {}
+local touchDebounceByUserIdAndArea = {}
 local areaConnections = {}
-local areaStatusGui = nil
-local areaStatusLabel = nil
 
-local function getAreaBounds()
-	local area = Workspace:FindFirstChild(Config.AREA_NAME)
+local function createRoomState()
+	return {
+		phase = "idle",
+		masterUserId = nil,
+		masterName = nil,
+		capacity = nil,
+		countdownEndsAt = nil,
+		reservedServerAccessCode = nil,
+		activeOccupants = {},
+		occupiedLookup = {},
+		lastBroadcastKey = "",
+	}
+end
+
+local function getRoomState(areaName)
+	if not rooms[areaName] then
+		rooms[areaName] = createRoomState()
+	end
+	return rooms[areaName]
+end
+
+local function findTeleportAreaInstance(areaName)
+	return Workspace:FindFirstChild(areaName, true)
+end
+
+local function isTeleportAreaName(name)
+	if not name then
+		return false
+	end
+
+	local prefix = Config.AREA_NAME_PREFIX or Config.AREA_NAME
+	return name:match("^" .. prefix .. "_?%d+$") ~= nil
+end
+
+local function getAreaBounds(areaName)
+	local area = findTeleportAreaInstance(areaName)
 	if not area then
 		return nil
 	end
@@ -43,8 +69,8 @@ local function getAreaBounds()
 	return nil
 end
 
-local function getAreaAdornee()
-	local area = Workspace:FindFirstChild(Config.AREA_NAME)
+local function getAreaAdornee(areaName)
+	local area = findTeleportAreaInstance(areaName)
 	if not area then
 		return nil
 	end
@@ -68,7 +94,8 @@ local function getAreaAdornee()
 	return nil
 end
 
-local function buildAreaStatusText()
+local function buildAreaStatusText(areaName)
+	local room = getRoomState(areaName)
 	if #room.activeOccupants == 0 then
 		return "Kosong"
 	end
@@ -89,24 +116,25 @@ local function buildAreaStatusText()
 	return countText .. "\n" .. countdownText
 end
 
-local function updateAreaStatusText()
-	if areaStatusLabel then
-		areaStatusLabel.Text = buildAreaStatusText()
+local function updateAreaStatusText(areaName)
+	local label = areaStatusLabels[areaName]
+	if label then
+		label.Text = buildAreaStatusText(areaName)
 	end
 end
 
-local function ensureAreaStatusGui()
-	if areaStatusGui and areaStatusGui.Parent then
+local function ensureAreaStatusGui(areaName)
+	if areaStatusGuis[areaName] and areaStatusGuis[areaName].Parent then
 		return
 	end
 
-	local adornee = getAreaAdornee()
+	local adornee = getAreaAdornee(areaName)
 	if not adornee then
 		return
 	end
 
 	local billboard = Instance.new("BillboardGui")
-	billboard.Name = "TeleportAreaStatus"
+	billboard.Name = "TeleportAreaStatus_" .. areaName
 	billboard.Adornee = adornee
 	billboard.AlwaysOnTop = true
 	billboard.MaxDistance = 140
@@ -136,20 +164,9 @@ local function ensureAreaStatusGui()
 	label.TextYAlignment = Enum.TextYAlignment.Center
 	label.Parent = back
 
-	areaStatusGui = billboard
-	areaStatusLabel = label
-	updateAreaStatusText()
-end
-
-local function isPointInsideArea(point)
-	local areaCFrame, areaSize = getAreaBounds()
-	if not areaCFrame or not areaSize then
-		return false
-	end
-
-	local localPoint = areaCFrame:PointToObjectSpace(point)
-	local halfSize = areaSize * 0.5
-	return math.abs(localPoint.X) <= halfSize.X and math.abs(localPoint.Y) <= halfSize.Y and math.abs(localPoint.Z) <= halfSize.Z
+	areaStatusGuis[areaName] = billboard
+	areaStatusLabels[areaName] = label
+	updateAreaStatusText(areaName)
 end
 
 local function getPlayerRoot(player)
@@ -174,8 +191,8 @@ local function getPlayerFromHit(hit)
 	return Players:GetPlayerFromCharacter(character)
 end
 
-local function getInsideSpawnCFrame()
-	local areaCFrame, areaSize = getAreaBounds()
+local function getInsideSpawnCFrame(areaName)
+	local areaCFrame, areaSize = getAreaBounds(areaName)
 	if not areaCFrame or not areaSize then
 		return nil
 	end
@@ -183,8 +200,8 @@ local function getInsideSpawnCFrame()
 	return areaCFrame + Vector3.new(0, (areaSize.Y * 0.5) + 3, 0)
 end
 
-local function getOutsideSpawnCFrame()
-	local areaCFrame, areaSize = getAreaBounds()
+local function getOutsideSpawnCFrame(areaName)
+	local areaCFrame, areaSize = getAreaBounds(areaName)
 	if not areaCFrame or not areaSize then
 		return nil
 	end
@@ -208,22 +225,26 @@ local function movePlayerToCFrame(player, targetCFrame)
 	root.CFrame = targetCFrame
 end
 
-local function setMaster(player)
+local function setMaster(areaName, player)
+	local room = getRoomState(areaName)
 	room.masterUserId = player and player.UserId or nil
 	room.masterName = player and player.Name or nil
 end
 
-local function resetRoom()
+local function resetRoom(areaName)
+	local room = getRoomState(areaName)
 	room.phase = "idle"
 	room.masterUserId = nil
 	room.masterName = nil
 	room.capacity = nil
 	room.countdownEndsAt = nil
+	room.reservedServerAccessCode = nil
 	room.activeOccupants = {}
 	room.occupiedLookup = {}
 end
 
-local function buildPayload()
+local function buildPayload(areaName)
+	local room = getRoomState(areaName)
 	local occupants = {}
 	for _, player in ipairs(room.activeOccupants) do
 		table.insert(occupants, {
@@ -234,6 +255,7 @@ local function buildPayload()
 	end
 
 	return {
+		areaName = areaName,
 		phase = room.phase,
 		masterUserId = room.masterUserId,
 		masterName = room.masterName,
@@ -243,8 +265,10 @@ local function buildPayload()
 	}
 end
 
-local function buildBroadcastKey()
+local function buildBroadcastKey(areaName)
+	local room = getRoomState(areaName)
 	local keyParts = {
+		areaName,
 		room.phase,
 		tostring(room.masterUserId or ""),
 		tostring(room.capacity or ""),
@@ -258,19 +282,21 @@ local function buildBroadcastKey()
 	return table.concat(keyParts, "|")
 end
 
-local function broadcastState(force)
-	local key = buildBroadcastKey()
+local function broadcastState(areaName, force)
+	local room = getRoomState(areaName)
+	local key = buildBroadcastKey(areaName)
 	if not force and key == room.lastBroadcastKey then
-		updateAreaStatusText()
+		updateAreaStatusText(areaName)
 		return
 	end
 
 	room.lastBroadcastKey = key
-	updateAreaStatusText()
-	remotes.StateChanged:FireAllClients(buildPayload())
+	updateAreaStatusText(areaName)
+	remotes.StateChanged:FireAllClients(buildPayload(areaName))
 end
 
-local function findOccupantIndex(userId)
+local function findOccupantIndex(areaName, userId)
+	local room = getRoomState(areaName)
 	for index, occupant in ipairs(room.activeOccupants) do
 		if occupant.UserId == userId then
 			return index
@@ -280,39 +306,44 @@ local function findOccupantIndex(userId)
 	return nil
 end
 
-local function ensureMasterAfterRemoval()
+local function ensureMasterAfterRemoval(areaName)
+	local room = getRoomState(areaName)
 	if room.masterUserId and room.occupiedLookup[room.masterUserId] then
 		return
 	end
 
 	if #room.activeOccupants > 0 then
-		setMaster(room.activeOccupants[1])
+		setMaster(areaName, room.activeOccupants[1])
 		return
 	end
 
-	setMaster(nil)
+	setMaster(areaName, nil)
 end
 
-local function removeOccupant(userId, moveOutside)
-	local index = findOccupantIndex(userId)
+local function removeOccupant(areaName, userId, moveOutside)
+	local room = getRoomState(areaName)
+	local index = findOccupantIndex(areaName, userId)
 	if not index then
 		return false
 	end
 
 	table.remove(room.activeOccupants, index)
 	room.occupiedLookup[userId] = nil
+	if playerAreaLookup[userId] == areaName then
+		playerAreaLookup[userId] = nil
+	end
 
 	if moveOutside then
 		local player = Players:GetPlayerByUserId(userId)
 		if player then
-			movePlayerToCFrame(player, getOutsideSpawnCFrame())
+			movePlayerToCFrame(player, getOutsideSpawnCFrame(areaName))
 		end
 	end
 
-	ensureMasterAfterRemoval()
+	ensureMasterAfterRemoval(areaName)
 
 	if #room.activeOccupants == 0 then
-		resetRoom()
+		resetRoom(areaName)
 	else
 		if room.phase ~= "countdown" and room.phase ~= "teleporting" then
 			room.phase = "awaiting_capacity"
@@ -322,11 +353,17 @@ local function removeOccupant(userId, moveOutside)
 		end
 	end
 
-	broadcastState(true)
+	broadcastState(areaName, true)
 	return true
 end
 
-local function addOccupant(player)
+local function addOccupant(areaName, player)
+	local room = getRoomState(areaName)
+	local mappedArea = playerAreaLookup[player.UserId]
+	if mappedArea and mappedArea ~= areaName then
+		return false
+	end
+
 	if room.occupiedLookup[player.UserId] then
 		return false
 	end
@@ -337,9 +374,10 @@ local function addOccupant(player)
 
 	table.insert(room.activeOccupants, player)
 	room.occupiedLookup[player.UserId] = true
+	playerAreaLookup[player.UserId] = areaName
 
 	if not room.masterUserId then
-		setMaster(player)
+		setMaster(areaName, player)
 		room.phase = "awaiting_capacity"
 		room.capacity = nil
 		room.countdownEndsAt = nil
@@ -347,26 +385,32 @@ local function addOccupant(player)
 		room.phase = "awaiting_capacity"
 	end
 
-	broadcastState(true)
+	broadcastState(areaName, true)
 	return true
 end
 
-local function handleAreaTouch(player)
+local function handleAreaTouch(areaName, player)
+	local room = getRoomState(areaName)
 	if not player or room.phase == "teleporting" then
 		return
 	end
 
+	if playerAreaLookup[player.UserId] and playerAreaLookup[player.UserId] ~= areaName then
+		return
+	end
+
 	if not room.masterUserId then
-		setMaster(player)
+		setMaster(areaName, player)
 		room.phase = "awaiting_capacity"
 	end
 
-	if addOccupant(player) then
-		movePlayerToCFrame(player, getInsideSpawnCFrame())
+	if addOccupant(areaName, player) then
+		movePlayerToCFrame(player, getInsideSpawnCFrame(areaName))
 	end
 end
 
-local function cleanupInvalidOccupants()
+local function cleanupInvalidOccupants(areaName)
+	local room = getRoomState(areaName)
 	local changed = false
 	for index = #room.activeOccupants, 1, -1 do
 		local occupant = room.activeOccupants[index]
@@ -375,100 +419,129 @@ local function cleanupInvalidOccupants()
 			table.remove(room.activeOccupants, index)
 			if userId then
 				room.occupiedLookup[userId] = nil
+				if playerAreaLookup[userId] == areaName then
+					playerAreaLookup[userId] = nil
+				end
 			end
 			changed = true
 		end
 	end
 
 	if changed then
-		ensureMasterAfterRemoval()
+		ensureMasterAfterRemoval(areaName)
 		if #room.activeOccupants == 0 then
-			resetRoom()
+			resetRoom(areaName)
 		elseif room.phase ~= "countdown" and room.phase ~= "teleporting" then
 			room.phase = "awaiting_capacity"
 		end
-		broadcastState(true)
+		broadcastState(areaName, true)
 	end
 end
 
-local function startCountdown(capacity)
+local function startCountdown(areaName, capacity)
+	local room = getRoomState(areaName)
 	if #room.activeOccupants == 0 or not room.masterUserId then
 		return
 	end
 
 	room.capacity = capacity
 	while #room.activeOccupants > room.capacity do
-		removeOccupant(room.activeOccupants[#room.activeOccupants].UserId, true)
+		removeOccupant(areaName, room.activeOccupants[#room.activeOccupants].UserId, true)
+	end
+
+	if not room.reservedServerAccessCode then
+		local success, accessCode = pcall(function()
+			return RobloxTeleportService:ReserveServer(Config.PLACE_ID)
+		end)
+
+		if success and accessCode then
+			room.reservedServerAccessCode = accessCode
+		else
+			warn("ReserveServer failed for " .. areaName .. ":", accessCode)
+		end
 	end
 
 	room.phase = "countdown"
 	room.countdownEndsAt = Workspace:GetServerTimeNow() + Config.COUNTDOWN_SECONDS
-	broadcastState(true)
+	broadcastState(areaName, true)
 end
 
-local function teleportActivePlayers()
+local function teleportActivePlayers(areaName)
+	local room = getRoomState(areaName)
 	if #room.activeOccupants == 0 then
-		resetRoom()
-		broadcastState(true)
+		resetRoom(areaName)
+		broadcastState(areaName, true)
 		return
 	end
 
 	room.phase = "teleporting"
-	broadcastState(true)
+	broadcastState(areaName, true)
 
 	local teleportTargets = table.clone(room.activeOccupants)
-	local success, err = pcall(function()
-		RobloxTeleportService:TeleportAsync(Config.PLACE_ID, teleportTargets)
-	end)
-
-	if not success then
-		warn("Teleport failed:", err)
+	local teleportOptions = Instance.new("TeleportOptions")
+	if room.reservedServerAccessCode then
+		teleportOptions.ReservedServerAccessCode = room.reservedServerAccessCode
 	end
 
-	resetRoom()
-	broadcastState(true)
+	for _, occupant in ipairs(room.activeOccupants) do
+		if playerAreaLookup[occupant.UserId] == areaName then
+			playerAreaLookup[occupant.UserId] = nil
+		end
+	end
+	local success, err = pcall(function()
+		RobloxTeleportService:TeleportAsync(Config.PLACE_ID, teleportTargets, teleportOptions)
+	end)
+	teleportOptions:Destroy()
+
+	if not success then
+		warn("Teleport failed for " .. areaName .. ":", err)
+	end
+
+	resetRoom(areaName)
+	broadcastState(areaName, true)
 end
 
-local function connectTouchOnPart(part)
+local function connectTouchOnPart(areaName, part)
 	table.insert(areaConnections, part.Touched:Connect(function(hit)
 		local player = getPlayerFromHit(hit)
 		if not player then
 			return
 		end
 
+		local debounceKey = player.UserId .. "_" .. areaName
 		local now = Workspace:GetServerTimeNow()
-		local lastTouch = touchDebounceByUserId[player.UserId] or 0
+		local lastTouch = touchDebounceByUserIdAndArea[debounceKey] or 0
 		if now - lastTouch < Config.TOUCH_DEBOUNCE_SECONDS then
 			return
 		end
 
-		touchDebounceByUserId[player.UserId] = now
-		handleAreaTouch(player)
+		touchDebounceByUserIdAndArea[debounceKey] = now
+		handleAreaTouch(areaName, player)
 	end))
 end
 
-local function bindAreaTouch()
-	local area = Workspace:FindFirstChild(Config.AREA_NAME)
+local function bindAreaTouch(areaName)
+	local area = findTeleportAreaInstance(areaName)
 	if not area then
-		warn("Teleport area not found:", Config.AREA_NAME)
+		warn("Teleport area not found:", areaName)
 		return
 	end
 
 	if area:IsA("BasePart") then
-		connectTouchOnPart(area)
+		connectTouchOnPart(areaName, area)
 		return
 	end
 
 	if area:IsA("Model") then
 		for _, descendant in ipairs(area:GetDescendants()) do
 			if descendant:IsA("BasePart") then
-				connectTouchOnPart(descendant)
+				connectTouchOnPart(areaName, descendant)
 			end
 		end
 
 		table.insert(areaConnections, area.DescendantAdded:Connect(function(descendant)
 			if descendant:IsA("BasePart") then
-				connectTouchOnPart(descendant)
+				connectTouchOnPart(areaName, descendant)
 			end
 		end))
 		return
@@ -477,11 +550,56 @@ local function bindAreaTouch()
 	warn("Teleport area must be BasePart or Model:", area:GetFullName())
 end
 
-function manager.start()
-	ensureAreaStatusGui()
-	bindAreaTouch()
+local function findAllAreas()
+	local areas = {}
+	for _, descendant in ipairs(Workspace:GetChildren()) do
+		if isTeleportAreaName(descendant.Name) then
+			table.insert(areas, descendant.Name)
+		end
+	end
+	return areas
+end
 
-	remotes.RequestCapacity.OnServerEvent:Connect(function(player, requestedCapacity)
+local function resolveAreaNameForPlayer(player, requestedAreaName)
+	if requestedAreaName and rooms[requestedAreaName] then
+		return requestedAreaName
+	end
+
+	return playerAreaLookup[player.UserId]
+end
+
+function manager.start()
+	-- Discover all teleport areas
+	local areas = findAllAreas()
+	if #areas == 0 then
+		warn("No teleport areas found with prefix:", Config.AREA_NAME_PREFIX)
+		return
+	end
+
+	-- Initialize each area
+	for _, areaName in ipairs(areas) do
+		ensureAreaStatusGui(areaName)
+		bindAreaTouch(areaName)
+	end
+
+	-- Watch for new areas being added
+	table.insert(areaConnections, Workspace.ChildAdded:Connect(function(child)
+		if isTeleportAreaName(child.Name) then
+			if not rooms[child.Name] then
+				ensureAreaStatusGui(child.Name)
+				bindAreaTouch(child.Name)
+			end
+		end
+	end))
+
+	-- Remote: RequestCapacity
+	remotes.RequestCapacity.OnServerEvent:Connect(function(player, areaName, requestedCapacity)
+		local resolvedAreaName = resolveAreaNameForPlayer(player, areaName)
+		if not resolvedAreaName or not requestedCapacity then
+			return
+		end
+
+		local room = getRoomState(resolvedAreaName)
 		if player.UserId ~= room.masterUserId then
 			return
 		end
@@ -496,10 +614,17 @@ function manager.start()
 		end
 
 		numericCapacity = math.clamp(math.floor(numericCapacity), Config.MIN_ROOM_SIZE, Config.MAX_ROOM_SIZE)
-		startCountdown(numericCapacity)
+		startCountdown(resolvedAreaName, numericCapacity)
 	end)
 
-	remotes.RequestKick.OnServerEvent:Connect(function(player, targetUserId)
+	-- Remote: RequestKick
+	remotes.RequestKick.OnServerEvent:Connect(function(player, areaName, targetUserId)
+		local resolvedAreaName = resolveAreaNameForPlayer(player, areaName)
+		if not resolvedAreaName or not targetUserId then
+			return
+		end
+
+		local room = getRoomState(resolvedAreaName)
 		if player.UserId ~= room.masterUserId then
 			return
 		end
@@ -513,30 +638,55 @@ function manager.start()
 			return
 		end
 
-		removeOccupant(numericTargetUserId, true)
+		removeOccupant(resolvedAreaName, numericTargetUserId, true)
 	end)
 
-	remotes.RequestExit.OnServerEvent:Connect(function(player)
-		removeOccupant(player.UserId, true)
+	-- Remote: RequestExit
+	remotes.RequestExit.OnServerEvent:Connect(function(player, areaName)
+		local resolvedAreaName = resolveAreaNameForPlayer(player, areaName)
+		if not resolvedAreaName then
+			return
+		end
+
+		removeOccupant(resolvedAreaName, player.UserId, true)
 	end)
 
+	-- PlayerRemoving handler
 	Players.PlayerRemoving:Connect(function(player)
-		removeOccupant(player.UserId, false)
-		touchDebounceByUserId[player.UserId] = nil
-	end)
-
-	task.spawn(function()
-		while true do
-			task.wait(Config.AREA_POLL_INTERVAL)
-			updateAreaStatusText()
-			cleanupInvalidOccupants()
-			if room.phase == "countdown" and room.countdownEndsAt and Workspace:GetServerTimeNow() >= room.countdownEndsAt then
-				teleportActivePlayers()
+		-- Remove from all areas
+		for areaName, room in pairs(rooms) do
+			if room.occupiedLookup[player.UserId] then
+				removeOccupant(areaName, player.UserId, false)
+			end
+		end
+		playerAreaLookup[player.UserId] = nil
+		-- Clear debounce entries for this player
+		for key in pairs(touchDebounceByUserIdAndArea) do
+			if key:match("^" .. player.UserId .. "_") then
+				touchDebounceByUserIdAndArea[key] = nil
 			end
 		end
 	end)
 
-	broadcastState(true)
+	-- Main update loop
+	task.spawn(function()
+		while true do
+			task.wait(Config.AREA_POLL_INTERVAL)
+			for areaName in pairs(rooms) do
+				updateAreaStatusText(areaName)
+				cleanupInvalidOccupants(areaName)
+				local room = getRoomState(areaName)
+				if room.phase == "countdown" and room.countdownEndsAt and Workspace:GetServerTimeNow() >= room.countdownEndsAt then
+					teleportActivePlayers(areaName)
+				end
+			end
+		end
+	end)
+
+	-- Initial broadcast for all areas
+	for _, areaName in ipairs(areas) do
+		broadcastState(areaName, true)
+	end
 end
 
 return manager

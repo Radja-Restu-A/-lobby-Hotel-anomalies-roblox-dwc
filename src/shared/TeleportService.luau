@@ -56,19 +56,29 @@ function TeleportService.getRemotes()
 	return cachedRemotes
 end
 
-function TeleportService.requestCapacity(capacity)
+function TeleportService.requestCapacity(areaName, capacity)
+	if capacity == nil then
+		capacity = areaName
+		areaName = nil
+	end
+
 	local remotes = TeleportService.getRemotes()
-	remotes.RequestCapacity:FireServer(capacity)
+	remotes.RequestCapacity:FireServer(areaName, capacity)
 end
 
-function TeleportService.requestKick(userId)
+function TeleportService.requestKick(areaName, userId)
+	if userId == nil then
+		userId = areaName
+		areaName = nil
+	end
+
 	local remotes = TeleportService.getRemotes()
-	remotes.RequestKick:FireServer(userId)
+	remotes.RequestKick:FireServer(areaName, userId)
 end
 
-function TeleportService.requestExit()
+function TeleportService.requestExit(areaName)
 	local remotes = TeleportService.getRemotes()
-	remotes.RequestExit:FireServer()
+	remotes.RequestExit:FireServer(areaName)
 end
 
 function TeleportService.onStateChanged(callback)

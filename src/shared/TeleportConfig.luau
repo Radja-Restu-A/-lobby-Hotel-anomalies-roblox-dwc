@@ -1,5 +1,6 @@
 return {
 	AREA_NAME = "teleport_area",
+	AREA_NAME_PREFIX = "teleport_area",
 	MIN_ROOM_SIZE = 1,
 	MAX_ROOM_SIZE = 8,
 	COUNTDOWN_SECONDS = 15,
