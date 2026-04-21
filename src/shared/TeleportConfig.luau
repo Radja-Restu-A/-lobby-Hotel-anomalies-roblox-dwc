@@ -9,6 +9,7 @@ return {
 	STATE_EVENT_NAME = "StateChanged",
 	SYSTEM_MESSAGE_EVENT_NAME = "SystemMessage",
 	REQUEST_CAPACITY_EVENT_NAME = "RequestCapacity",
+	REQUEST_FRIEND_ONLY_EVENT_NAME = "RequestFriendOnly",
 	REQUEST_KICK_EVENT_NAME = "RequestKick",
 	REQUEST_EXIT_EVENT_NAME = "RequestExit",
 	AREA_POLL_INTERVAL = 0.25,

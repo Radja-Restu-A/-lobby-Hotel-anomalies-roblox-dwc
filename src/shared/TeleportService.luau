@@ -50,6 +50,7 @@ function TeleportService.getRemotes()
 		StateChanged = ensureRemoteEvent(folder, Config.STATE_EVENT_NAME),
 		SystemMessage = ensureRemoteEvent(folder, Config.SYSTEM_MESSAGE_EVENT_NAME),
 		RequestCapacity = ensureRemoteEvent(folder, Config.REQUEST_CAPACITY_EVENT_NAME),
+		RequestFriendOnly = ensureRemoteEvent(folder, Config.REQUEST_FRIEND_ONLY_EVENT_NAME),
 		RequestKick = ensureRemoteEvent(folder, Config.REQUEST_KICK_EVENT_NAME),
 		RequestExit = ensureRemoteEvent(folder, Config.REQUEST_EXIT_EVENT_NAME),
 	}
@@ -75,6 +76,16 @@ function TeleportService.requestKick(areaName, userId)
 
 	local remotes = TeleportService.getRemotes()
 	remotes.RequestKick:FireServer(areaName, userId)
+end
+
+function TeleportService.requestFriendOnly(areaName, enabled)
+	if enabled == nil then
+		enabled = areaName
+		areaName = nil
+	end
+
+	local remotes = TeleportService.getRemotes()
+	remotes.RequestFriendOnly:FireServer(areaName, enabled)
 end
 
 function TeleportService.requestExit(areaName)

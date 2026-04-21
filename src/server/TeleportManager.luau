@@ -36,6 +36,7 @@ local areaStatusGuis = {}
 local areaStatusLabels = {}
 local touchDebounceByUserIdAndArea = {}
 local areaConnections = {}
+local removeOccupant
 
 local function createRoomState()
 	return {
@@ -43,6 +44,7 @@ local function createRoomState()
 		masterUserId = nil,
 		masterName = nil,
 		capacity = nil,
+		allowFriendsOnly = false,
 		countdownEndsAt = nil,
 		reservedServerAccessCode = nil,
 		activeOccupants = {},
@@ -265,10 +267,44 @@ local function resetRoom(areaName)
 	room.masterUserId = nil
 	room.masterName = nil
 	room.capacity = nil
+	room.allowFriendsOnly = false
 	room.countdownEndsAt = nil
 	room.reservedServerAccessCode = nil
 	room.activeOccupants = {}
 	room.occupiedLookup = {}
+end
+
+local function isFriendOfMaster(areaName, player)
+	local room = getRoomState(areaName)
+	if not room.masterUserId then
+		return false
+	end
+
+	if player.UserId == room.masterUserId then
+		return true
+	end
+
+	local ok, result = pcall(function()
+		return player:IsFriendsWith(room.masterUserId)
+	end)
+
+	return ok and result == true
+end
+
+local function filterCountdownOccupantsByFriendOnly(areaName)
+	local room = getRoomState(areaName)
+	if not room.allowFriendsOnly then
+		return
+	end
+
+	for index = #room.activeOccupants, 1, -1 do
+		local occupant = room.activeOccupants[index]
+		if occupant and occupant.Parent and occupant.UserId ~= room.masterUserId then
+			if not isFriendOfMaster(areaName, occupant) then
+				removeOccupant(areaName, occupant.UserId, true)
+			end
+		end
+	end
 end
 
 local function buildPayload(areaName)
@@ -288,6 +324,7 @@ local function buildPayload(areaName)
 		masterUserId = room.masterUserId,
 		masterName = room.masterName,
 		capacity = room.capacity,
+		allowFriendsOnly = room.allowFriendsOnly,
 		countdownEndsAt = room.countdownEndsAt,
 		occupants = occupants,
 	}
@@ -300,6 +337,7 @@ local function buildBroadcastKey(areaName)
 		room.phase,
 		tostring(room.masterUserId or ""),
 		tostring(room.capacity or ""),
+		tostring(room.allowFriendsOnly),
 		tostring(room.countdownEndsAt or ""),
 	}
 
@@ -348,7 +386,7 @@ local function ensureMasterAfterRemoval(areaName)
 	setMaster(areaName, nil)
 end
 
-local function removeOccupant(areaName, userId, moveOutside)
+removeOccupant = function(areaName, userId, moveOutside)
 	local room = getRoomState(areaName)
 	local index = findOccupantIndex(areaName, userId)
 	if not index then
@@ -397,6 +435,10 @@ local function addOccupant(areaName, player)
 	end
 
 	if room.capacity and #room.activeOccupants >= room.capacity then
+		return false
+	end
+
+	if room.phase == "countdown" and room.allowFriendsOnly and not isFriendOfMaster(areaName, player) then
 		return false
 	end
 
@@ -483,8 +525,16 @@ local function startCountdown(areaName, capacity)
 	end
 
 	room.capacity = capacity
+	room.phase = "countdown"
+	filterCountdownOccupantsByFriendOnly(areaName)
 	while #room.activeOccupants > room.capacity do
 		removeOccupant(areaName, room.activeOccupants[#room.activeOccupants].UserId, true)
+	end
+
+	if #room.activeOccupants == 0 or not room.masterUserId then
+		resetRoom(areaName)
+		broadcastState(areaName, true)
+		return
 	end
 
 	if not room.reservedServerAccessCode then
@@ -506,7 +556,6 @@ local function startCountdown(areaName, capacity)
 		end
 	end
 
-	room.phase = "countdown"
 	room.countdownEndsAt = Workspace:GetServerTimeNow() + Config.COUNTDOWN_SECONDS
 	broadcastState(areaName, true)
 end
@@ -674,6 +723,26 @@ function manager.start()
 
 		numericCapacity = math.clamp(math.floor(numericCapacity), Config.MIN_ROOM_SIZE, Config.MAX_ROOM_SIZE)
 		startCountdown(resolvedAreaName, numericCapacity)
+	end)
+
+	-- Remote: RequestFriendOnly
+	remotes.RequestFriendOnly.OnServerEvent:Connect(function(player, areaName, enabled)
+		local resolvedAreaName = resolveAreaNameForPlayer(player, areaName)
+		if not resolvedAreaName then
+			return
+		end
+
+		local room = getRoomState(resolvedAreaName)
+		if player.UserId ~= room.masterUserId then
+			return
+		end
+
+		if room.phase ~= "awaiting_capacity" then
+			return
+		end
+
+		room.allowFriendsOnly = enabled == true
+		broadcastState(resolvedAreaName, true)
 	end)
 
 	-- Remote: RequestKick

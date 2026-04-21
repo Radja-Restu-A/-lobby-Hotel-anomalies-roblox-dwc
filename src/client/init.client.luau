@@ -10,6 +10,7 @@ local currentState = {
 	phase = "idle",
 	masterUserId = nil,
 	capacity = nil,
+	allowFriendsOnly = false,
 	occupants = {},
 }
 
@@ -109,12 +110,60 @@ selectionFrame.Size = UDim2.fromScale(1, 1)
 selectionFrame.Visible = false
 selectionFrame.Parent = contentFrame
 
+local selectionGridFrame = Instance.new("Frame")
+selectionGridFrame.BackgroundTransparency = 1
+selectionGridFrame.Size = UDim2.new(1, 0, 1, -44)
+selectionGridFrame.Parent = selectionFrame
+
 local selectionGrid = Instance.new("UIGridLayout")
 selectionGrid.CellPadding = UDim2.fromOffset(8, 8)
 selectionGrid.CellSize = UDim2.fromOffset(84, 84)
 selectionGrid.FillDirectionMaxCells = 4
 selectionGrid.SortOrder = Enum.SortOrder.LayoutOrder
-selectionGrid.Parent = selectionFrame
+selectionGrid.Parent = selectionGridFrame
+
+local friendOnlyRow = Instance.new("Frame")
+friendOnlyRow.AnchorPoint = Vector2.new(0.5, 1)
+friendOnlyRow.Position = UDim2.new(0.5, 0, 1, -2)
+friendOnlyRow.Size = UDim2.fromOffset(330, 28)
+friendOnlyRow.BackgroundTransparency = 1
+friendOnlyRow.Parent = selectionFrame
+
+local friendOnlyCheckbox = Instance.new("TextButton")
+friendOnlyCheckbox.Size = UDim2.fromOffset(22, 22)
+friendOnlyCheckbox.Position = UDim2.fromOffset(0, 3)
+friendOnlyCheckbox.BackgroundColor3 = Color3.fromRGB(30, 34, 45)
+friendOnlyCheckbox.BorderSizePixel = 0
+friendOnlyCheckbox.AutoButtonColor = false
+friendOnlyCheckbox.Text = ""
+friendOnlyCheckbox.Parent = friendOnlyRow
+
+local friendOnlyCheckboxCorner = Instance.new("UICorner")
+friendOnlyCheckboxCorner.CornerRadius = UDim.new(0, 6)
+friendOnlyCheckboxCorner.Parent = friendOnlyCheckbox
+
+local friendOnlyCheckmark = Instance.new("TextLabel")
+friendOnlyCheckmark.BackgroundTransparency = 1
+friendOnlyCheckmark.Size = UDim2.fromScale(1, 1)
+friendOnlyCheckmark.Font = Enum.Font.GothamBold
+friendOnlyCheckmark.Text = ""
+friendOnlyCheckmark.TextColor3 = Color3.fromRGB(255, 255, 255)
+friendOnlyCheckmark.TextSize = 16
+friendOnlyCheckmark.Parent = friendOnlyCheckbox
+
+local friendOnlyLabelButton = Instance.new("TextButton")
+friendOnlyLabelButton.AnchorPoint = Vector2.new(0, 0.5)
+friendOnlyLabelButton.Position = UDim2.fromOffset(30, 14)
+friendOnlyLabelButton.Size = UDim2.fromOffset(300, 24)
+friendOnlyLabelButton.BackgroundTransparency = 1
+friendOnlyLabelButton.BorderSizePixel = 0
+friendOnlyLabelButton.AutoButtonColor = false
+friendOnlyLabelButton.Font = Enum.Font.GothamSemibold
+friendOnlyLabelButton.Text = "hanya izinkan teman untuk bergabung"
+friendOnlyLabelButton.TextXAlignment = Enum.TextXAlignment.Left
+friendOnlyLabelButton.TextColor3 = Color3.fromRGB(231, 236, 248)
+friendOnlyLabelButton.TextSize = 14
+friendOnlyLabelButton.Parent = friendOnlyRow
 
 local rosterFrame = Instance.new("Frame")
 rosterFrame.BackgroundTransparency = 1
@@ -150,6 +199,32 @@ exitButton.MouseButton1Click:Connect(function()
 	TeleportService.requestExit(currentAreaName)
 end)
 
+local function setFriendOnlyCheckboxVisual(enabled, isActive)
+	if enabled then
+		friendOnlyCheckbox.BackgroundColor3 = Color3.fromRGB(95, 147, 255)
+		friendOnlyCheckmark.Text = "✓"
+		friendOnlyLabelButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	else
+		friendOnlyCheckbox.BackgroundColor3 = isActive and Color3.fromRGB(36, 42, 57) or Color3.fromRGB(30, 34, 45)
+		friendOnlyCheckmark.Text = ""
+		friendOnlyLabelButton.TextColor3 = isActive and Color3.fromRGB(231, 236, 248) or Color3.fromRGB(130, 137, 156)
+	end
+end
+
+local function requestToggleFriendOnly()
+	if not isLocalMaster() then
+		return
+	end
+	if currentState.phase ~= "awaiting_capacity" then
+		return
+	end
+
+	TeleportService.requestFriendOnly(currentAreaName, not currentState.allowFriendsOnly)
+end
+
+friendOnlyCheckbox.MouseButton1Click:Connect(requestToggleFriendOnly)
+friendOnlyLabelButton.MouseButton1Click:Connect(requestToggleFriendOnly)
+
 local seatButtons = {}
 local avatarSlots = {}
 local thumbnailCache = {}
@@ -175,7 +250,7 @@ for capacity = 1, Config.MAX_ROOM_SIZE do
 	button.AutoButtonColor = false
 	button.Font = Enum.Font.GothamBold
 	button.TextSize = 28
-	button.Parent = selectionFrame
+	button.Parent = selectionGridFrame
 
 	local buttonCorner = Instance.new("UICorner")
 	buttonCorner.CornerRadius = UDim.new(0, 12)
@@ -319,6 +394,10 @@ local function applyStateToUi()
 	local showSelection = isLocalMaster() and currentState.phase == "awaiting_capacity"
 	selectionFrame.Visible = showSelection
 	rosterFrame.Visible = not showSelection
+	friendOnlyRow.Visible = showSelection
+	friendOnlyCheckbox.Active = showSelection
+	friendOnlyLabelButton.Active = showSelection
+	setFriendOnlyCheckboxVisual(currentState.allowFriendsOnly, showSelection)
 
 	for capacity, button in pairs(seatButtons) do
 		button.Active = showSelection
@@ -348,6 +427,7 @@ local function applyState(state)
 	currentState.areaName = state.areaName
 	currentState.masterUserId = state.masterUserId
 	currentState.capacity = state.capacity
+	currentState.allowFriendsOnly = state.allowFriendsOnly == true
 	currentState.occupants = state.occupants or {}
 
 	if currentAreaName == state.areaName and currentState.phase == "idle" and #currentState.occupants == 0 then
